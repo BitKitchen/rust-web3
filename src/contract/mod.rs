@@ -1,6 +1,10 @@
 //! Ethereum Contract Interface
 
 use ethabi;
+use ethkey;
+use ethcore;
+use ethcore_transaction;
+use rlp;
 
 use std::time;
 use api::{Eth, Namespace};
@@ -83,30 +87,55 @@ impl<T: Transport> Contract<T> {
         self.address
     }
 
-    /// Execute a contract function
-    pub fn call<P>(&self, func: &str, params: P, from: Address, options: Options) -> CallResult<H256, T::Out>
+  /// Execute a contract function
+  pub fn call<P>(&self, func: &str, params: P, from: Address, options: Options) -> CallResult<H256, T::Out>
     where
-        P: Tokenize,
-    {
-        self.abi
-            .function(func.into())
-            .and_then(|function| function.encode_input(&params.into_tokens()))
-            .map(move |data| {
-                self.eth
-                    .send_transaction(TransactionRequest {
-                        from: from,
-                        to: Some(self.address.clone()),
-                        gas: options.gas,
-                        gas_price: options.gas_price,
-                        value: options.value,
-                        nonce: options.nonce,
-                        data: Some(Bytes(data)),
-                        condition: options.condition,
-                    })
-                    .into()
-            })
-            .unwrap_or_else(Into::into)
-    }
+      P: Tokenize,
+  {
+    self.abi
+      .function(func.into())
+      .and_then(|function| function.encode_input(&params.into_tokens()))
+      .map(move |data| {
+        self.eth
+          .send_transaction(TransactionRequest {
+            from: from,
+            to: Some(self.address.clone()),
+            gas: options.gas,
+            gas_price: options.gas_price,
+            value: options.value,
+            nonce: options.nonce,
+            data: Some(Bytes(data)),
+            condition: options.condition,
+          })
+          .into()
+      })
+      .unwrap_or_else(Into::into)
+  }
+
+  /// Execute a contract function
+  pub fn call_offline<P>(&self, func: &str, params: P, from: Address, secret: &ethkey::Secret, options: Options) -> CallResult<H256, T::Out>
+    where
+      P: Tokenize,
+  {
+    self.abi
+      .function(func.into())
+      .and_then(|function| function.encode_input(&params.into_tokens()))
+      .map(move |data| {
+        let tx = ethcore_transaction::Transaction {
+          nonce: options.nonce.unwrap(),
+          gas_price: options.gas_price.unwrap(),
+          gas: options.gas.unwrap(),
+          action: ethcore_transaction::Action::Call(from),
+          value: options.value.unwrap(),
+          data,
+        };
+        let tx = tx.sign(secret, None);
+        self.eth
+          .send_raw_transaction(Bytes(rlp::encode(&tx).into_vec()))
+          .into()
+      })
+      .unwrap_or_else(Into::into)
+  }
 
     /// Execute a contract function and wait for confirmations
     pub fn call_with_confirmations<P>(&self, func: &str, params: P, from: Address, options: Options, confirmations: usize) -> confirm::SendTransactionWithConfirmation<T>
